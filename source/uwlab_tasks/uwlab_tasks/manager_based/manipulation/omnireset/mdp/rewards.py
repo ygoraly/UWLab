@@ -179,6 +179,46 @@ def success_reward(env: ManagerBasedRLEnv, context: str = "progress_context") ->
     return torch.where(orientation_aligned & position_aligned, 1.0, 0.0)
 
 
+def ee_object_distance(
+    env: ManagerBasedRLEnv,
+    ee_cfg: SceneEntityCfg,
+    object_cfg: SceneEntityCfg,
+    std: float = 0.2,
+) -> torch.Tensor:
+    """Reward for the EE approaching the object.
+    Args:
+        ee_cfg:     SceneEntityCfg for the robot, with ``body_names`` set to the
+                    EE link (e.g. ``"right_wrist_yaw_link"``).  The manager
+                    resolves ``body_ids`` before calling this function.
+        object_cfg: SceneEntityCfg for the rigid object (e.g. ``"object"``).
+        std:        Distance scale for the tanh shaping (metres).  Values below
+                    ``std`` get reward > 0.5; values above get < 0.5.
+    """
+    robot: Articulation = env.scene[ee_cfg.name]
+    obj: RigidObject = env.scene[object_cfg.name]
+    ee_pos = robot.data.body_link_pos_w[:, ee_cfg.body_ids].view(-1, 3)
+    obj_pos = obj.data.root_pos_w
+    dist = torch.norm(ee_pos - obj_pos, dim=1)
+    return 1.0 - torch.tanh(dist / std)
+
+
+def object_lift(
+    env: ManagerBasedRLEnv,
+    object_cfg: SceneEntityCfg,
+    table_height: float = 0.85,
+    min_lift: float = 0.05,
+) -> torch.Tensor:
+    """Reward for lifting the object off the table.
+    Args:
+        object_cfg:   SceneEntityCfg for the rigid object.
+        table_height: World-space z of the table top surface (metres).
+        min_lift:     Minimum height above table before reward is non-zero (metres).
+    """
+    obj: RigidObject = env.scene[object_cfg.name]
+    height = obj.data.root_pos_w[:, 2]
+    return torch.clamp(height - table_height - min_lift, min=0.0)
+
+
 def action_l2_clamped(env: ManagerBasedRLEnv) -> torch.Tensor:
     """Penalize the actions using L2 squared kernel."""
     return torch.clamp(torch.sum(torch.square(env.action_manager.action), dim=1), 0, 1e4)

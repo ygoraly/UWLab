@@ -298,7 +298,7 @@ class ObjectAnywhereEEAnywhereEventCfg(G1Dex3ResetStatesBaseEventCfg):
         params={
             "pose_range": {
                 # Offsets from init_state.pos = (0.5, 0.0, 0.90).
-                "x": (-0.15, 0.15),
+                "x": (-0.15, -0.05),
                 "y": (-0.25, 0.25),
                 # z=0.0 keeps cylinder at table-surface resting height (0.90 m);
                 # z=0.30 places it 30 cm above — midair states are valid for
@@ -326,12 +326,11 @@ class ObjectAnywhereEEAnywhereEventCfg(G1Dex3ResetStatesBaseEventCfg):
             "pose_range_b": {
                 # Offsets from root_pos_w = (0, 0, 0.75).
                 # x: 0.20–0.70 m forward → world x ∈ [0.20, 0.70] (G1 arm reach).
-                "x": (0.20, 0.70),
-                # y: same lateral range as UR5e.
-                "y": (-0.40, 0.40),
+                "x": (-0.25, -0.05),
+                "y": (-0.1, 0),
                 # z: 0.10–0.45 m above root → world z ∈ [0.85, 1.20].
                 # Lower bound 0.85 = table surface.  Upper bound 1.20 ≈ shoulder height.
-                "z": (0.10, 0.45),
+                "z": (0.10, 0.25),
                 # Orientation samples identical to UR5e — cover downward/forward
                 # approach orientations without sampling fully inverted poses.
                 "roll": (0.0, 0.0),
@@ -410,8 +409,8 @@ class ObjectRestingEEGraspedEventCfg(G1Dex3ResetStatesBaseEventCfg):
         params={
             "pose_range": {
                 # Same x/y table-surface range as ObjectAnywhereEEAnywhere.
-                "x": (-0.15, 0.15),
-                "y": (-0.25, 0.25),
+                "x": (-0.25, -0.05),
+                "y": (-0.1, 0),
                 # z=0.0: cylinder stays at its init_state z = 0.90 m (table surface).
                 # No mid-air placement — the "resting" constraint requires it on the table.
                 "z": (0.0, 0.0),

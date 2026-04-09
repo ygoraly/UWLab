@@ -494,10 +494,7 @@ class check_reset_state_success(ManagerTermBase):
             & collision_free
             & time_out
         )
-
-        if time_out:
-            x = 2
-
+        
         if self.assembly_success_prob is not None:
             ins_pos_w, ins_quat_w = self.insertive_asset_offset.apply(self.insertive_asset)
             rec_pos_w, rec_quat_w = self.receptive_asset_offset.apply(self.receptive_asset)

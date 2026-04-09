@@ -97,11 +97,11 @@ G1_DEX3_RIGHT_HAND_BINARY = BinaryJointPositionActionCfg(
     close_command_expr={
         "right_hand_index_0_joint": 1.0,
         "right_hand_middle_0_joint": 1.0,
-        "right_hand_thumb_0_joint": 0.5,
+        "right_hand_thumb_0_joint": 0.0,  # opposition — rotate thumb to face fingers
         "right_hand_index_1_joint": 0.8,
         "right_hand_middle_1_joint": 0.8,
-        "right_hand_thumb_1_joint": 0.5,
-        "right_hand_thumb_2_joint": 0.5,
+        "right_hand_thumb_1_joint": -0.3,  # proximal flexion — main curl
+        "right_hand_thumb_2_joint": -0.8,  # distal flexion — tip
     },
 )
 

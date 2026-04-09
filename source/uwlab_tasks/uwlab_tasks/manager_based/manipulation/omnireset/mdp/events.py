@@ -51,6 +51,11 @@ class grasp_sampling_event(ManagerTermBase):
         self.lateral_sigma = cfg.params.get("lateral_sigma")
         self.visualize_grasps = cfg.params.get("visualize_grasps", False)
         self.visualization_scale = cfg.params.get("visualization_scale", 0.03)
+        # How to bias which surface points are kept for antipodal sampling:
+        #   "top"    – high-Z + upward-normal bias (default; UR5e top-down approach)
+        #   "center" – mid-height + horizontal-normal bias (Dex3 side approach)
+        #   "uniform"– no bias; keep a random subset
+        self.surface_bias_mode = cfg.params.get("surface_bias_mode", "top")
 
         # Read parameters from object metadata
         gripper_asset = env.scene[self.gripper_cfg.name]
@@ -92,6 +97,7 @@ class grasp_sampling_event(ManagerTermBase):
         num_standoff_samples: int,
         num_orientations: int,
         lateral_sigma: float,
+        surface_bias_mode: str = "top",
         visualize_grasps: bool = False,
         visualization_scale: float = 0.01,
     ) -> None:
@@ -136,21 +142,41 @@ class grasp_sampling_event(ManagerTermBase):
         return grasp_transforms
 
     def _extract_mesh_from_asset(self, asset):
-        """Extract trimesh from IsaacLab asset."""
-        # Get USD stage and prim path from the asset
+        """Extract trimesh from IsaacLab asset.
+
+        Handles both UsdGeom.Mesh assets (e.g. peg.usd via UsdFileCfg) and
+        procedural primitive assets spawned by CylinderCfg, SphereCfg, etc.
+
+        The original _find_mesh_in_prim + _usd_mesh_to_trimesh pipeline only
+        recognised UsdGeom.Mesh and returned None for UsdGeom.Cylinder, causing
+        an AttributeError on GetPointsAttr.  utils.prim_to_trimesh calls
+        create_primitive_mesh for non-Mesh prims, which correctly handles
+        Cylinder, Sphere, Cube, Capsule, and Cone.
+        """
+        from pxr import Usd
+
         stage = omni.usd.get_context().get_stage()
-
-        # For multi-environment setups, we need to get the first environment's path
         prim_path = asset.cfg.prim_path.replace(".*", "0", 1)
-
-        # Get the USD prim
         prim = stage.GetPrimAtPath(prim_path)
 
-        # Find mesh geometry in the prim hierarchy
-        mesh_schema = self._find_mesh_in_prim(prim)
+        # Geometry types handled by utils.prim_to_trimesh (mirrors RigidObjectHasher)
+        _GEOM_TYPES = {"Mesh", "Cube", "Sphere", "Cylinder", "Capsule", "Cone"}
 
-        # Convert USD mesh to trimesh
-        return self._usd_mesh_to_trimesh(mesh_schema)
+        geom_prim = None
+        for child in Usd.PrimRange(prim):
+            if child.GetTypeName() in _GEOM_TYPES:
+                geom_prim = child
+                break
+
+        if geom_prim is None:
+            child_types = {c.GetTypeName() for c in Usd.PrimRange(prim)}
+            raise RuntimeError(
+                f"_extract_mesh_from_asset: no geometry prim found under '{prim_path}'. "
+                f"Types in subtree: {child_types}. "
+                f"Has the scene been initialised and is the prim_path correct?"
+            )
+
+        return utils.prim_to_trimesh(geom_prim)
 
     def _find_mesh_in_prim(self, prim):
         """Find the first mesh under a prim."""
@@ -224,22 +250,42 @@ class grasp_sampling_event(ManagerTermBase):
 
         max_gripper_width = self.gripper_maximum_aperture
 
-        # Sample more points initially to allow for top-bias filtering
-        initial_sample_size = num_surface_samples * 10  # Sample 10x more for filtering
+        # Sample 10× more points than needed, then keep a biased subset.
+        initial_sample_size = num_surface_samples * 10
         surface_points, face_indices = mesh.sample(initial_sample_size, return_index=True)
         surface_normals = mesh.face_normals[face_indices]
 
-        # Bias toward top surfaces: prioritize points with higher Z coordinates and upward-facing normals
         z_coords = surface_points[:, 2]
-        normal_z_components = surface_normals[:, 2]  # Z component of surface normals
-
-        # Calculate top-bias scores (higher Z + upward normal = higher score)
         z_normalized = (z_coords - z_coords.min()) / (z_coords.max() - z_coords.min() + 1e-8)
-        normal_score = np.maximum(normal_z_components, 0)  # Only positive Z normals
-        top_bias_scores = z_normalized + normal_score
 
-        # Select top-biased subset
-        top_indices = np.argsort(top_bias_scores)[-num_surface_samples:]
+        if self.surface_bias_mode == "top":
+            # UR5e / top-down approach: prefer high-Z points with upward-facing normals.
+            # Upward normals = top cap of the peg, which is where a descending gripper
+            # first makes contact before closing around the peg from above.
+            normal_score = np.maximum(surface_normals[:, 2], 0)
+            bias_scores = z_normalized + normal_score
+
+        elif self.surface_bias_mode == "center":
+            # Side approach (e.g. Dex3): prefer mid-height points with horizontal normals.
+            #
+            # Height component: inverted-V centered at 0.5 — scores 1.0 at the object
+            # mid-height and 0.0 at the very top/bottom edges.  This keeps both the
+            # index and middle fingers (spread ~15 mm apart along Z) away from the
+            # cylinder end-caps where one finger would overhang.
+            height_score = 1.0 - np.abs(z_normalized - 0.5) * 2.0
+            #
+            # Normal component: magnitude of the horizontal (XY) component of the
+            # surface normal.  1.0 for a perfectly horizontal normal (curved cylinder
+            # side), 0.0 for a perfectly vertical normal (flat end-cap).  Horizontal
+            # normals produce horizontal antipodal axes — exactly what a side-facing
+            # gripper needs to form a clean power grasp.
+            normal_score = np.sqrt(surface_normals[:, 0] ** 2 + surface_normals[:, 1] ** 2)
+            bias_scores = height_score + normal_score
+
+        else:  # "uniform" — no geometric bias, pure random subset
+            bias_scores = np.random.rand(initial_sample_size)
+
+        top_indices = np.argsort(bias_scores)[-num_surface_samples:]
         surface_points = surface_points[top_indices]
         surface_normals = surface_normals[top_indices]
 

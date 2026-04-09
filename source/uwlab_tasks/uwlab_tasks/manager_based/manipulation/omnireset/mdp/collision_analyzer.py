@@ -67,8 +67,24 @@ class CollisionAnalyzer:
                 self.local_pts.append(local_pts.view(env.num_envs, 1, cfg.num_points, 3))
                 self.body_ids.append(self.asset.body_names.index(body_name))
             # pc_time = time.perf_counter() - start
-        self.local_pts = torch.cat(self.local_pts, dim=1)
-        self.body_ids = torch.tensor(self.body_ids, dtype=torch.int, device=env.device)
+        if self.local_pts:
+            self.local_pts = torch.cat(self.local_pts, dim=1)
+            self.body_ids = torch.tensor(self.body_ids, dtype=torch.int, device=env.device)
+            self.has_geometry = True
+        else:
+            import warnings
+
+            warnings.warn(
+                f"CollisionAnalyzer: no collision geometry found for any body of asset "
+                f"'{cfg.asset_cfg.name}' (prim_path='{self.asset.cfg.prim_path}'). "
+                f"Likely cause: collision mesh prototypes are missing from the USD "
+                f"(re-run scripts/tools/extract_dex3_right_hand_usd.py). "
+                f"The collision check will be SKIPPED — all envs treated as collision-free.",
+                stacklevel=2,
+            )
+            self.local_pts = None
+            self.body_ids = torch.empty(0, dtype=torch.int, device=env.device)
+            self.has_geometry = False
 
         self.num_coll_per_obstacle_per_env = torch.empty(
             (len(self.obstacles), env.num_envs), dtype=torch.int32, device=env.device
@@ -115,6 +131,8 @@ class CollisionAnalyzer:
         )
 
     def __call__(self, env: ManagerBasedRLEnv, env_ids: torch.Tensor):
+        if not self.has_geometry:
+            return torch.ones(len(env_ids), dtype=torch.bool, device=env.device)
         pos_w = (
             self.asset.data.body_link_pos_w[env_ids][:, self.body_ids]
             .unsqueeze(2)

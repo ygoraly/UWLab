@@ -33,3 +33,19 @@ gym.register(
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_cfg:Base_PPORunnerCfg",
     },
 )
+
+# Phase 2 — Grasp sampling env for the Dex3 right hand + cylinder.
+# Used by scripts/tools/record_grasps_g1.py and
+#          scripts/environments/verify_g1_dex3_phase2.py.
+#
+# Pre-requisite: run the USD extraction script once to create the standalone
+# hand USD before calling gym.make() with this id:
+#   cd $PROJECT_ROOT && python3 .../scripts/tools/extract_dex3_right_hand_usd.py
+gym.register(
+    id="OmniReset-Dex3-GraspSampling-Cylinder-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.grasp_sampling_cfg:Dex3GraspSamplingCfg",
+    },
+)

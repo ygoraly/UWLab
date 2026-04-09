@@ -37,14 +37,16 @@ This writes:
 The extraction script also writes metadata.yaml with side-grasp parameters.
 Verify them with visualize_grasps=True before the full recording run.
 
-Cylinder primitive pre-requisite (Step 4, still pending)
-----------------------------------------------------------
-Patch _extract_mesh_from_asset in mdp/events.py (shared UWLab-g1 copy) so
-grasp_sampling_event can extract trimesh from a UsdGeom.Cylinder prim.
-CylinderCfg spawns a UsdGeom.Cylinder, not a UsdGeom.Mesh; the upstream
-_find_mesh_in_prim traversal returns None and crashes.
-CollisionAnalyzerCfg already handles primitives (check_grasp_success is fine);
-only the candidate-generation path in grasp_sampling_event needs fixing.
+Cylinder primitive support (Step 4 — implemented)
+--------------------------------------------------
+_extract_mesh_from_asset in mdp/events.py is patched to call
+utils.prim_to_trimesh(geom_prim) instead of the original _find_mesh_in_prim +
+_usd_mesh_to_trimesh pipeline.  prim_to_trimesh delegates to
+create_primitive_mesh for non-Mesh prim types, which uses
+trimesh.creation.cylinder(radius=..., height=...) for UsdGeom.Cylinder.
+CollisionAnalyzerCfg already handled primitives via RigidObjectHasher
+(unchanged).  verify_g1_dex3_phase2.py check B4 validates the extracted
+mesh dimensions at runtime.
 
 3-finger geometry note
 -----------------------
@@ -284,6 +286,14 @@ class Dex3GraspSamplingTerminationCfg:
             # height from where it started, or if it falls below that height.
             "max_pos_deviation": OBJECT_SPAWN_HEIGHT / 2,
             "pos_z_threshold": OBJECT_SPAWN_HEIGHT / 2,
+            # The Dex3 palm is pinned by fix_root_link=True (world-anchored fixed
+            # joint).  PhysX reports large body_*_vel_w for the cylinder because
+            # the solver applies constraint-correction impulses every step, even
+            # though the cylinder is visually stationary.  Position-delta mode
+            # avoids this by checking how much the cylinder actually moves between
+            # consecutive steps rather than looking at instantaneous velocity.
+            "stability_mode": "position_delta",
+            "pos_delta_threshold": 0.001,
         },
         time_out=True,
     )

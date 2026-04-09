@@ -686,6 +686,11 @@ class reset_end_effector_from_grasp_dataset(ManagerTermBase):
         self.gripper_joint_ids: list[int] | slice = gripper_cfg.joint_ids
         self.gripper_joint_names: list[str] = gripper_cfg.joint_names if gripper_cfg.joint_names else []
 
+        # Optional explicit object name — required when fixed_asset uses a
+        # procedural primitive (e.g. CylinderCfg) that has no usd_path attribute.
+        # When provided, it bypasses the object_name_from_usd(usd_path) derivation.
+        self._object_name: str | None = cfg.params.get("object_name", None)
+
         # Compute grasp dataset path from object name
         self.grasp_dataset_path = self._compute_grasp_dataset_path()
 
@@ -693,8 +698,11 @@ class reset_end_effector_from_grasp_dataset(ManagerTermBase):
         self._load_and_precompute_grasps(env)
 
     def _compute_grasp_dataset_path(self) -> str:
-        usd_path = self.fixed_asset.cfg.spawn.usd_path
-        obj_name = utils.object_name_from_usd(usd_path)
+        if self._object_name is not None:
+            obj_name = self._object_name
+        else:
+            usd_path = self.fixed_asset.cfg.spawn.usd_path
+            obj_name = utils.object_name_from_usd(usd_path)
         return f"{self.dataset_dir}/Grasps/{obj_name}/grasps.pt"
 
     def _load_and_precompute_grasps(self, env):
@@ -762,6 +770,7 @@ class reset_end_effector_from_grasp_dataset(ManagerTermBase):
         robot_ik_cfg: SceneEntityCfg,
         gripper_cfg: SceneEntityCfg,
         pose_range_b: dict[str, tuple[float, float]] = dict(),
+        object_name: str | None = None,
     ) -> None:
         """Apply grasp poses to reset end effector."""
         # RigidObject asset

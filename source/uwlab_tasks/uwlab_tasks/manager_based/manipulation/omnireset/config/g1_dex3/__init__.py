@@ -49,3 +49,36 @@ gym.register(
         "env_cfg_entry_point": f"{__name__}.grasp_sampling_cfg:Dex3GraspSamplingCfg",
     },
 )
+
+# Phase 3 — Reset-state recording envs.
+# These are NOT used via gym.make() during recording (record_reset_states_g1.py
+# instantiates the cfg directly to avoid hydra/registry lookup issues).
+# Registered here so the IDs are discoverable by config sweeps and for
+# interactive viewer debugging: launch with
+#   python scripts/environments/zero_agent.py \
+#       --task OmniReset-G1Dex3-ResetStates-ObjectAnywhereEEAnywhere-v0
+#
+# Pre-requisite for ObjectRestingEEGrasped: grasps.pt must exist at
+#   ./Datasets/OmniReset/Grasps/Cylinder/grasps.pt
+#   (produced by scripts/tools/record_grasps_g1.py in Phase 2).
+gym.register(
+    id="OmniReset-G1Dex3-ResetStates-ObjectAnywhereEEAnywhere-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": (
+            f"{__name__}.reset_states_cfg:G1Dex3ObjectAnywhereEEAnywhereResetStatesCfg"
+        ),
+    },
+)
+
+gym.register(
+    id="OmniReset-G1Dex3-ResetStates-ObjectRestingEEGrasped-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": (
+            f"{__name__}.reset_states_cfg:G1Dex3ObjectRestingEEGraspedResetStatesCfg"
+        ),
+    },
+)

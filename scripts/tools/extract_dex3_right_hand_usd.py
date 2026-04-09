@@ -47,6 +47,7 @@ USD structure produced
   /right_hand_thumb_0_link
   /right_hand_thumb_1_link
   /right_hand_thumb_2_link
+  /world_palm_link_joint           (FixedJoint, body0=world, body1=right_hand_palm_link)
   /joints/
     right_hand_camera_base_joint   (FixedJoint)
     right_hand_index_0_joint       (RevoluteJoint)
@@ -240,6 +241,34 @@ def extract(src_usd: str, dst_usd: str) -> None:
             if ok:
                 proto_count += 1
     print(f"  ✓ {proto_count} prototype prims copied")
+
+    # -----------------------------------------------------------------------
+    # Add a world-anchored FixedJoint to pin the palm during physics simulation.
+    #
+    # Isaac Lab's fix_root_link=True normally creates this joint at spawn time,
+    # but that code path requires the ArticulationRootAPI prim to also carry
+    # RigidBodyAPI — which is not the case for this USD (the root is an Xform,
+    # the first rigid body is right_hand_palm_link one level below).
+    #
+    # By baking the joint into the USD itself, Isaac Lab's
+    # find_global_fixed_joint_prim finds it (it searches for any joint with
+    # only one body target), and simply calls SetJointEnabled(True) instead
+    # of trying to create a new one.  This allows fix_root_link=True to work
+    # without hitting the NotImplementedError.
+    #
+    # The joint has:
+    #   physics:body0 — absent (empty = world frame anchor)
+    #   physics:body1 — right_hand_palm_link
+    # -----------------------------------------------------------------------
+    print("Adding world-anchored FixedJoint for fix_root_link support...")
+    joint_spec = Sdf.PrimSpec(root_spec, "world_palm_link_joint", Sdf.SpecifierDef, "PhysicsJoint")
+    joint_spec.SetInfo(
+        "apiSchemas",
+        Sdf.TokenListOp.CreateExplicit(["PhysicsFixedJointAPI"]),
+    )
+    body1_rel = Sdf.RelationshipSpec(joint_spec, "physics:body1", False)
+    body1_rel.targetPathList.Append(Sdf.Path(f"{DST_ROOT}/right_hand_palm_link"))
+    print(f"  ✓ world_palm_link_joint (body0=world, body1={DST_ROOT}/right_hand_palm_link)")
 
     dst_layer.Save()
     print(f"\nStandalone hand USD saved: {dst_usd}")

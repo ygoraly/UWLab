@@ -130,6 +130,20 @@ class check_grasp_success(ManagerTermBase):
         self.consecutive_stability_steps = cfg.params.get("consecutive_stability_steps", 5)
         self.stability_counter = torch.zeros(env.num_envs, device=env.device, dtype=torch.int32)
 
+        # Velocity thresholds used when stability_mode="velocity" (default).
+        self.lin_vel_threshold = cfg.params.get("lin_vel_threshold", 0.05)
+        self.ang_vel_threshold = cfg.params.get("ang_vel_threshold", 1.0)
+
+        # "velocity"      — original behaviour: require instantaneous PhysX velocities to be low.
+        # "position_delta" — compare object position between consecutive steps.  Immune to the
+        #                    large solver-correction velocities that appear when the gripper root
+        #                    is pinned by a fixed joint (e.g. Dex3 fix_root_link=True), where
+        #                    body_*_vel_w reflects constraint forces rather than real motion.
+        self.stability_mode = cfg.params.get("stability_mode", "velocity")
+        self.pos_delta_threshold = cfg.params.get("pos_delta_threshold", 0.001)
+        # Stores the object position from the previous step for position-delta mode.
+        self._prev_object_pos: torch.Tensor | None = None
+
     def reset(self, env_ids: torch.Tensor | None = None) -> None:
         super().reset(env_ids)
 
@@ -143,8 +157,11 @@ class check_grasp_success(ManagerTermBase):
 
         if env_ids is None:
             self.stability_counter.zero_()
+            self._prev_object_pos = None
         else:
             self.stability_counter[env_ids] = 0
+            if self._prev_object_pos is not None:
+                self._prev_object_pos[env_ids] = object_asset.data.root_pos_w[env_ids].clone()
 
     def __call__(
         self,
@@ -155,6 +172,10 @@ class check_grasp_success(ManagerTermBase):
         max_pos_deviation: float = 0.05,
         pos_z_threshold: float = 0.05,
         consecutive_stability_steps: int = 5,
+        lin_vel_threshold: float = 0.05,
+        ang_vel_threshold: float = 1.0,
+        stability_mode: str = "velocity",
+        pos_delta_threshold: float = 0.001,
     ) -> torch.Tensor:
         # Get object and gripper from scene
         object_asset = env.scene[self.object_cfg.name]
@@ -172,13 +193,25 @@ class check_grasp_success(ManagerTermBase):
         current_step_stable = torch.ones(env.num_envs, device=env.device, dtype=torch.bool)
         # Check gripper (articulation) velocities
         current_step_stable &= gripper_asset.data.joint_vel.abs().sum(dim=1) < 5.0
-        # Check object (rigid object) velocities
-        if isinstance(object_asset, RigidObject):
-            current_step_stable &= object_asset.data.body_lin_vel_w.abs().sum(dim=2).sum(dim=1) < 0.05
-            current_step_stable &= object_asset.data.body_ang_vel_w.abs().sum(dim=2).sum(dim=1) < 1.0
-        elif isinstance(object_asset, RigidObjectCollection):
-            current_step_stable &= object_asset.data.object_lin_vel_w.abs().sum(dim=2).sum(dim=1) < 0.05
-            current_step_stable &= object_asset.data.object_ang_vel_w.abs().sum(dim=2).sum(dim=1) < 1.0
+
+        if self.stability_mode == "position_delta":
+            # Position-delta mode: the object is stable when its position barely moves
+            # between consecutive steps.  This is immune to large solver-correction
+            # velocities that appear when the gripper is pinned by a fixed joint.
+            cur_pos = object_asset.data.root_pos_w.clone()
+            if self._prev_object_pos is None:
+                self._prev_object_pos = cur_pos.clone()
+            pos_delta = (cur_pos - self._prev_object_pos).norm(dim=1)
+            current_step_stable &= pos_delta < self.pos_delta_threshold
+            self._prev_object_pos = cur_pos
+        else:
+            # Default velocity mode: require instantaneous PhysX velocities to be low.
+            if isinstance(object_asset, RigidObject):
+                current_step_stable &= object_asset.data.body_lin_vel_w.abs().sum(dim=2).sum(dim=1) < self.lin_vel_threshold
+                current_step_stable &= object_asset.data.body_ang_vel_w.abs().sum(dim=2).sum(dim=1) < self.ang_vel_threshold
+            elif isinstance(object_asset, RigidObjectCollection):
+                current_step_stable &= object_asset.data.object_lin_vel_w.abs().sum(dim=2).sum(dim=1) < self.lin_vel_threshold
+                current_step_stable &= object_asset.data.object_ang_vel_w.abs().sum(dim=2).sum(dim=1) < self.ang_vel_threshold
 
         self.stability_counter = torch.where(
             current_step_stable,
@@ -205,6 +238,7 @@ class check_grasp_success(ManagerTermBase):
         all_env_ids = torch.arange(env.num_envs, device=env.device)
         collision_free = self.collision_analyzer(env, all_env_ids)
 
+    
         grasp_success = (
             (~abnormal_gripper_state)
             & stability_reached
@@ -238,11 +272,22 @@ class check_reset_state_success(ManagerTermBase):
         self.pos_z_threshold = cfg.params.get("pos_z_threshold")
         self.consecutive_stability_steps = cfg.params.get("consecutive_stability_steps", 5)
 
-        # Load gripper_approach_direction from metadata
-        robot_asset = env.scene[self.robot_cfg.name]
-        usd_path = robot_asset.cfg.spawn.usd_path
-        metadata = utils.read_metadata_from_usd_directory(usd_path)
-        self.gripper_approach_direction = tuple(metadata.get("gripper_approach_direction"))
+        # orientation_z_threshold: the gripper approach direction (in world frame) must
+        # have a z-component below this value to pass.  The original check used -0.5,
+        # which keeps top-down grippers (Robotiq) within 60° of vertical.
+        # Pass None to skip the check entirely — required for side-grasping hands (Dex3)
+        # whose approach vector is horizontal and would always fail a downward-z check.
+        # When None, the metadata read is also skipped: the full robot USD (e.g. G1 body)
+        # may not have a metadata.yaml with gripper_approach_direction.
+        self.orientation_z_threshold: float | None = cfg.params.get("orientation_z_threshold", -0.5)
+
+        if self.orientation_z_threshold is not None:
+            robot_asset = env.scene[self.robot_cfg.name]
+            usd_path = robot_asset.cfg.spawn.usd_path
+            metadata = utils.read_metadata_from_usd_directory(usd_path)
+            self.gripper_approach_direction: tuple | None = tuple(metadata.get("gripper_approach_direction"))
+        else:
+            self.gripper_approach_direction = None
 
         # Initialize stability counter for consecutive stability checking
         self.stability_counter = torch.zeros(env.num_envs, device=env.device, dtype=torch.int32)
@@ -328,6 +373,7 @@ class check_reset_state_success(ManagerTermBase):
         receptive_asset_cfg: SceneEntityCfg | None = None,
         assembly_success_prob: float | None = None,
         assembly_threshold_scale: float = 1.0,
+        orientation_z_threshold: float | None = -0.5,
     ) -> torch.Tensor:
 
         # Check time out
@@ -338,15 +384,19 @@ class check_reset_state_success(ManagerTermBase):
             self.robot_asset.data.joint_vel.abs() > (self.robot_asset.data.joint_vel_limits * 2)
         ).any(dim=1)
 
-        # Check if gripper orientation is pointing downward within 60 degrees of vertical
-        ee_quat = self.robot_asset.data.body_link_quat_w[:, self.ee_body_idx]
-        gripper_approach_local = torch.tensor(
-            self.gripper_approach_direction, device=env.device, dtype=torch.float32
-        ).expand(env.num_envs, -1)
-        gripper_approach_world = math_utils.quat_apply(ee_quat, gripper_approach_local)
-        gripper_orientation_within_range = (
-            gripper_approach_world[:, 2] < -0.5
-        )  # cos(60°) = 0.5, so z < -0.5 for 60° cone
+        # Check if gripper orientation is within range.
+        # When orientation_z_threshold is None the check is unconditionally passed —
+        # used for side-grasping hands (Dex3) whose horizontal approach vector would
+        # always fail a downward-z test.
+        if self.orientation_z_threshold is not None:
+            ee_quat = self.robot_asset.data.body_link_quat_w[:, self.ee_body_idx]
+            gripper_approach_local = torch.tensor(
+                self.gripper_approach_direction, device=env.device, dtype=torch.float32
+            ).expand(env.num_envs, -1)
+            gripper_approach_world = math_utils.quat_apply(ee_quat, gripper_approach_local)
+            gripper_orientation_within_range = gripper_approach_world[:, 2] < self.orientation_z_threshold
+        else:
+            gripper_orientation_within_range = torch.ones(env.num_envs, device=env.device, dtype=torch.bool)
 
         # Check if asset velocities are small
         current_step_stable = torch.ones(env.num_envs, device=env.device, dtype=torch.bool)

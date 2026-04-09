@@ -98,6 +98,12 @@ DEX3_RIGHT_STANDALONE_CFG = ArticulationCfg(
             enabled_self_collisions=False,
             solver_position_iteration_count=8,
             solver_velocity_iteration_count=4,
+            # fix_root_link is handled by a world-anchored FixedJoint baked into
+            # the standalone USD by extract_dex3_right_hand_usd.py.
+            # Isaac Lab finds that joint via find_global_fixed_joint_prim and
+            # enables it, which avoids the NotImplementedError that arises when
+            # the articulation root prim has no RigidBodyAPI.
+            fix_root_link=True,
         ),
     ),
     init_state=ArticulationCfg.InitialStateCfg(

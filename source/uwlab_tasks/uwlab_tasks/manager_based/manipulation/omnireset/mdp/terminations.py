@@ -5,6 +5,7 @@
 
 """MDP functions for manipulation tasks."""
 
+import time
 import numpy as np
 import torch
 
@@ -272,6 +273,18 @@ class check_reset_state_success(ManagerTermBase):
         self.pos_z_threshold = cfg.params.get("pos_z_threshold")
         self.consecutive_stability_steps = cfg.params.get("consecutive_stability_steps", 5)
 
+        # Velocity thresholds used when stability_mode="velocity" (default).
+        self.lin_vel_threshold = cfg.params.get("lin_vel_threshold", 0.1)
+        self.ang_vel_threshold = cfg.params.get("ang_vel_threshold", 1.0)
+
+        # "velocity"      — original behaviour: require instantaneous PhysX velocities to be low.
+        # "position_delta" — compare asset positions between consecutive steps.  Immune to the
+        #                    large solver-correction velocities that appear when the robot root
+        #                    is pinned by a fixed joint (e.g. G1 fix_root_link=True).
+        self.stability_mode = cfg.params.get("stability_mode", "velocity")
+        self.pos_delta_threshold = cfg.params.get("pos_delta_threshold", 0.001)
+        self._prev_asset_positions: dict[int, torch.Tensor] = {}
+
         # orientation_z_threshold: the gripper approach direction (in world frame) must
         # have a z-component below this value to pass.  The original check used -0.5,
         # which keeps top-down grippers (Robotiq) within 60° of vertical.
@@ -340,8 +353,15 @@ class check_reset_state_success(ManagerTermBase):
 
         if env_ids is None:
             self.stability_counter.zero_()
+            self._prev_asset_positions.clear()
         else:
             self.stability_counter[env_ids] = 0
+            for i, asset in enumerate(self.assets_to_check):
+                if i in self._prev_asset_positions:
+                    if asset is self.robot_asset:
+                        self._prev_asset_positions[i][env_ids] = asset.data.body_link_pos_w[env_ids, self.ee_body_idx].clone()
+                    else:
+                        self._prev_asset_positions[i][env_ids] = asset.data.root_pos_w[env_ids].clone()
 
         if self.assembly_success_prob is not None:
             if env_ids is None:
@@ -374,6 +394,10 @@ class check_reset_state_success(ManagerTermBase):
         assembly_success_prob: float | None = None,
         assembly_threshold_scale: float = 1.0,
         orientation_z_threshold: float | None = -0.5,
+        stability_mode: str = "velocity",
+        pos_delta_threshold: float = 0.001,
+        lin_vel_threshold: float = 0.1,
+        ang_vel_threshold: float = 1.0,
     ) -> torch.Tensor:
 
         # Check time out
@@ -398,17 +422,28 @@ class check_reset_state_success(ManagerTermBase):
         else:
             gripper_orientation_within_range = torch.ones(env.num_envs, device=env.device, dtype=torch.bool)
 
-        # Check if asset velocities are small
+        # Check if asset velocities are small (or positions barely moved)
         current_step_stable = torch.ones(env.num_envs, device=env.device, dtype=torch.bool)
-        for asset in self.assets_to_check:
-            if isinstance(asset, Articulation):
-                current_step_stable &= asset.data.joint_vel.abs().sum(dim=1) < 5.0
-            elif isinstance(asset, RigidObject):
-                current_step_stable &= asset.data.body_lin_vel_w.abs().sum(dim=2).sum(dim=1) < 0.1
-                current_step_stable &= asset.data.body_ang_vel_w.abs().sum(dim=2).sum(dim=1) < 1.0
-            elif isinstance(asset, RigidObjectCollection):
-                current_step_stable &= asset.data.object_lin_vel_w.abs().sum(dim=2).sum(dim=1) < 0.1
-                current_step_stable &= asset.data.object_ang_vel_w.abs().sum(dim=2).sum(dim=1) < 1.0
+        for i, asset in enumerate(self.assets_to_check):
+            if self.stability_mode == "position_delta":
+                if asset is self.robot_asset:
+                    cur_pos = asset.data.body_link_pos_w[:, self.ee_body_idx].clone()
+                else:
+                    cur_pos = asset.data.root_pos_w.clone()
+                if i not in self._prev_asset_positions:
+                    self._prev_asset_positions[i] = cur_pos.clone()
+                pos_delta = (cur_pos - self._prev_asset_positions[i]).norm(dim=1)
+                current_step_stable &= pos_delta < self.pos_delta_threshold
+                self._prev_asset_positions[i] = cur_pos
+            else:
+                if isinstance(asset, Articulation):
+                    current_step_stable &= asset.data.joint_vel.abs().sum(dim=1) < 5.0
+                elif isinstance(asset, RigidObject):
+                    current_step_stable &= asset.data.body_lin_vel_w.abs().sum(dim=2).sum(dim=1) < self.lin_vel_threshold
+                    current_step_stable &= asset.data.body_ang_vel_w.abs().sum(dim=2).sum(dim=1) < self.ang_vel_threshold
+                elif isinstance(asset, RigidObjectCollection):
+                    current_step_stable &= asset.data.object_lin_vel_w.abs().sum(dim=2).sum(dim=1) < self.lin_vel_threshold
+                    current_step_stable &= asset.data.object_ang_vel_w.abs().sum(dim=2).sum(dim=1) < self.ang_vel_threshold
 
         self.stability_counter = torch.where(
             current_step_stable,
@@ -459,6 +494,9 @@ class check_reset_state_success(ManagerTermBase):
             & collision_free
             & time_out
         )
+
+        if time_out:
+            x = 2
 
         if self.assembly_success_prob is not None:
             ins_pos_w, ins_quat_w = self.insertive_asset_offset.apply(self.insertive_asset)

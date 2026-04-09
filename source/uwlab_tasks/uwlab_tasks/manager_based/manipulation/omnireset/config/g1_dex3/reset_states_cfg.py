@@ -546,6 +546,12 @@ class G1Dex3ResetStatesTerminationCfg:
             "consecutive_stability_steps": 5,
             # None: Dex3 is a side-grasping hand; see class docstring above.
             "orientation_z_threshold": None,
+            # position_delta: compare asset positions between consecutive steps instead
+            # of checking PhysX velocities.  The G1's fix_root_link=True causes large
+            # solver-correction velocities that never settle, preventing the velocity
+            # mode from reaching stability.
+            "stability_mode": "position_delta",
+            "pos_delta_threshold": 0.005,
         },
         time_out=True,
     )

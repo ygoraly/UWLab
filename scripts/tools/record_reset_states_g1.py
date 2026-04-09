@@ -217,7 +217,7 @@ def main() -> None:
     print(f"[1/3] Creating environment ({task_id}) ...")
     env = cast(ManagerBasedRLEnv, gym.make(task_id, cfg=env_cfg)).unwrapped
     env.reset()
-
+ 
     # ------------------------------------------------------------------
     # Action setup
     # For ObjectRestingEEGrasped: close the gripper (-1.0 on last dim) so
@@ -249,12 +249,12 @@ def main() -> None:
         dones = terminated | truncated
         done_idx = torch.where(dones)[0]
 
-        # Re-randomise gripper action for ObjectAnywhereEEAnywhere when an
-        # episode ends, so consecutive recordings vary in gripper state.
-        if done_idx.numel() > 0 and reset_type == "ObjectAnywhereEEAnywhere":
-            actions[done_idx, -1] = (
-                torch.randint(0, 2, (done_idx.numel(),), device=env.device, dtype=torch.float32) * 2 - 1
-            )
+        # After mid-step resets (inside env.step), the same stale-data bug
+        # applies: DiffIK will read pre-reset body_pos_w on the NEXT step
+        # and drive the arm to the wrong pose.  Force a data-buffer sync so
+        # the next process_actions() reads the IK-teleported state.
+        if done_idx.numel() > 0:
+            env.scene.update(env.physics_dt)
 
         new_count = env.recorder_manager.exported_successful_episode_count
         if new_count > current_successful:

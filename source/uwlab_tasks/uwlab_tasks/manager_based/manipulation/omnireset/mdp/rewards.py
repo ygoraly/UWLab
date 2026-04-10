@@ -219,6 +219,46 @@ def object_lift(
     return torch.clamp(height - table_height - min_lift, min=0.0)
 
 
+class PickSuccessContext(ManagerTermBase):
+    """Tracks whether the object has been lifted above a height threshold.
+
+    Exposes a ``.success`` boolean tensor ``(num_envs,)`` that
+    MultiResetManager can read via its ``success`` eval-string for
+    per-reset-type success-rate logging.  This is the G1 pick-task
+    equivalent of ProgressContext, which tracks assembly alignment for
+    the UR5e peg-insertion task.
+
+    The reward value returned is always zero — this term exists purely as
+    a state tracker.  The actual lift reward comes from ``object_lift``.
+    """
+
+    def __init__(self, cfg: RewardTermCfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        self.object_cfg: SceneEntityCfg = cfg.params["object_cfg"]
+        self.obj: RigidObject = env.scene[self.object_cfg.name]
+        self.table_height: float = cfg.params.get("table_height", 0.85)
+        self.lift_threshold: float = cfg.params.get("lift_threshold", 0.05)
+        self.success = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+
+    def reset(self, env_ids: torch.Tensor | None = None) -> None:
+        super().reset(env_ids)
+        if env_ids is not None:
+            self.success[env_ids] = False
+        else:
+            self.success[:] = False
+
+    def __call__(
+        self,
+        env: ManagerBasedRLEnv,
+        object_cfg: SceneEntityCfg,
+        table_height: float = 0.85,
+        lift_threshold: float = 0.05,
+    ) -> torch.Tensor:
+        height = self.obj.data.root_pos_w[:, 2]
+        self.success[:] = height > (self.table_height + self.lift_threshold)
+        return torch.zeros(env.num_envs, device=env.device)
+
+
 def action_l2_clamped(env: ManagerBasedRLEnv) -> torch.Tensor:
     """Penalize the actions using L2 squared kernel."""
     return torch.clamp(torch.sum(torch.square(env.action_manager.action), dim=1), 0, 1e4)

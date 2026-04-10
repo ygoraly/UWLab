@@ -99,6 +99,13 @@ from isaaclab.utils.io import dump_yaml
 
 from isaaclab_rl.rsl_rl import RslRlBaseRunnerCfg, RslRlVecEnvWrapper
 
+# Ensure UWLab-g1 sources take priority over any system-installed uwlab_tasks.
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+for _pkg in ("uwlab_tasks", "uwlab_assets"):
+    _pkg_path = os.path.join(_REPO_ROOT, "source", _pkg)
+    if os.path.isdir(_pkg_path) and _pkg_path not in sys.path:
+        sys.path.insert(0, _pkg_path)
+
 import isaaclab_tasks  # noqa: F401
 import uwlab_tasks  # noqa: F401
 from isaaclab.utils.assets import retrieve_file_path

@@ -285,6 +285,17 @@ class RewardsCfg:
         },
     )
 
+    # -- Success tracker (zero reward, exposes .success for MultiResetManager) -
+    pick_success_context = RewTerm(
+        func=task_mdp.PickSuccessContext,
+        weight=0.0,
+        params={
+            "object_cfg": SceneEntityCfg("object"),
+            "table_height": 0.85,
+            "lift_threshold": 0.05,
+        },
+    )
+
 
 # ---------------------------------------------------------------------------
 # Events
@@ -383,28 +394,16 @@ class BaseEventCfg:
 
 
 @configclass
-class TrainEventCfg(BaseEventCfg):
-    """Training events: base randomisation + per-episode cylinder pose reset.
+class TrainEventCfgSimple(BaseEventCfg):
+    """Phase 1 training events: uniform cylinder pose reset (no dataset).
 
-    Replaces the UR5e TrainEventCfg which used MultiResetManager loading .pt
-    dataset files (ObjectAnywhereEEAnywhere, ObjectRestingEEGrasped, etc.).
-    Those datasets do not exist for the G1 yet — they are generated in Phases
-    2 and 3.  For Phase 1 we use a simple uniform reset:
-
-        reset_object_pose
-            Calls reset_root_state_uniform on "object" at mode="reset".
-            pose_range values are *offsets from init_state.pos*, so:
-              x: (-0.15, +0.15) → final x ∈ [0.35, 0.65] m
-              y: (-0.20, +0.20) → final y ∈ [-0.20, 0.20] m
-            z is omitted → offset 0, cylinder stays at init z = 0.90 m
-            (table top 0.85 + half-height 0.05 = 0.90).
+    Kept as a fallback for debugging without Phase 2/3 datasets.
+    Registered as OmniReset-G1Dex3-Pick-Cylinder-Train-Simple-v0.
 
     Execution order of mode="reset" events (field declaration order):
         1. randomize_gripper_actuator_parameters  (from BaseEventCfg)
         2. reset_everything                       (from BaseEventCfg)
-        3. reset_object_pose                      (TrainEventCfg, runs after base)
-    Step 2 resets the cylinder to init_state.pos; step 3 then applies the
-    random offset on top of that.
+        3. reset_object_pose                      (runs after base)
     """
 
     reset_object_pose = EventTerm(
@@ -414,6 +413,50 @@ class TrainEventCfg(BaseEventCfg):
             "pose_range": {"x": (-0.15, 0.15), "y": (-0.20, 0.20)},
             "velocity_range": {},
             "asset_cfg": SceneEntityCfg("object"),
+        },
+    )
+
+
+@configclass
+class TrainEventCfg(BaseEventCfg):
+    """Phase 4 training events: MultiResetManager with 2 reset-state datasets.
+
+    Replaces the Phase 1 uniform reset with MultiResetManager, which samples
+    pre-recorded scene snapshots from Phase 3 datasets.  This is the G1
+    equivalent of the UR5e TrainEventCfg, with two differences:
+
+    1. Two reset types instead of four — ObjectAnywhereEEGrasped and
+       ObjectPartiallyAssembledEEGrasped are assembly-specific and don't
+       apply to the simplified pick task.
+    2. pair_dir="Cylinder" replaces the insertive/receptive USD path
+       derivation (the G1 scene has no insertive_object or receptive_object).
+    3. success reads PickSuccessContext.success (object lifted above table)
+       instead of the UR5e ProgressContext.success (assembly alignment).
+       This gives per-reset-type pick success rates in TensorBoard under
+       Metrics/task_0_success_rate and Metrics/task_1_success_rate.
+
+    Dataset files consumed (produced by record_reset_states_g1.py):
+        ./Datasets/OmniReset/Resets/Cylinder/resets_ObjectAnywhereEEAnywhere.pt
+        ./Datasets/OmniReset/Resets/Cylinder/resets_ObjectRestingEEGrasped.pt
+
+    Execution order of mode="reset" events (field declaration order):
+        1. randomize_gripper_actuator_parameters  (from BaseEventCfg)
+        2. reset_everything                       (from BaseEventCfg)
+        3. reset_from_reset_states                (overwrites with dataset state)
+    """
+
+    reset_from_reset_states = EventTerm(
+        func=task_mdp.MultiResetManager,
+        mode="reset",
+        params={
+            "dataset_dir": "./Datasets/OmniReset",
+            "pair_dir": "Cylinder",
+            "reset_types": [
+                "ObjectAnywhereEEAnywhere",
+                "ObjectRestingEEGrasped",
+            ],
+            "probs": [0.5, 0.5],
+            "success": "env.reward_manager.get_term_cfg('pick_success_context').func.success",
         },
     )
 
@@ -524,15 +567,23 @@ class G1Dex3PickCylinderCfg(ManagerBasedRLEnvCfg):
 
 
 # ---------------------------------------------------------------------------
-# Concrete training configuration
+# Concrete training configurations
 # ---------------------------------------------------------------------------
 @configclass
 class G1Dex3PickTrainCfg(G1Dex3PickCylinderCfg):
-    """Training config: uniform cylinder reset, full DR, no curriculum.
+    """Training config: MultiResetManager with Phase 3 datasets.
 
-    Fills in the MISSING events field with TrainEventCfg, which adds
-    per-episode cylinder pose randomisation on top of the shared
-    BaseEventCfg material / mass / actuator-gain randomisation.
+    Requires ./Datasets/OmniReset/Resets/Cylinder/resets_*.pt from Phase 3.
     """
 
     events: TrainEventCfg = TrainEventCfg()
+
+
+@configclass
+class G1Dex3PickTrainSimpleCfg(G1Dex3PickCylinderCfg):
+    """Fallback training config: uniform cylinder reset, no datasets needed.
+
+    Useful for debugging without Phase 2/3 datasets.
+    """
+
+    events: TrainEventCfgSimple = TrainEventCfgSimple()

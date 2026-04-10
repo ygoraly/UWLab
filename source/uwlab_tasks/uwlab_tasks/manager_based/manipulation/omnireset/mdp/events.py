@@ -1060,10 +1060,11 @@ class MultiResetManager(ManagerTermBase):
         if len(reset_types) != len(probabilities):
             raise ValueError("Number of reset_types must match number of probabilities")
 
-        # Derive pair directory from scene objects
-        insertive_usd_path = env.scene["insertive_object"].cfg.spawn.usd_path
-        receptive_usd_path = env.scene["receptive_object"].cfg.spawn.usd_path
-        pair = utils.compute_pair_dir(insertive_usd_path, receptive_usd_path)
+        pair = cfg.params.get("pair_dir")
+        if pair is None:
+            insertive_usd_path = env.scene["insertive_object"].cfg.spawn.usd_path
+            receptive_usd_path = env.scene["receptive_object"].cfg.spawn.usd_path
+            pair = utils.compute_pair_dir(insertive_usd_path, receptive_usd_path)
 
         # Generate dataset paths from pair directory and reset types
         dataset_files = []
@@ -1107,6 +1108,7 @@ class MultiResetManager(ManagerTermBase):
         reset_types: list[str],
         probs: list[float],
         success: str | None = None,
+        pair_dir: str | None = None,
     ) -> None:
         if env_ids is None:
             env_ids = torch.arange(self.num_envs, device=self._env.device)

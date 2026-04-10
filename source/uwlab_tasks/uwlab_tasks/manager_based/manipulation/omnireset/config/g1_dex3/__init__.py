@@ -22,14 +22,26 @@ gym.register(
     },
 )
 
-# Training config (events=TrainEventCfg filled): this is the env to use for
-# gym.make() during Phase 1 training and the verification gate.
+# Training config (MultiResetManager with Phase 3 datasets).
+# Requires ./Datasets/OmniReset/Resets/Cylinder/resets_*.pt.
 gym.register(
     id="OmniReset-G1Dex3-Pick-Cylinder-Train-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": f"{__name__}.rl_state_cfg:G1Dex3PickTrainCfg",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_cfg:Base_PPORunnerCfg",
+    },
+)
+
+# Simple training config (uniform cylinder reset, no datasets needed).
+# Useful for debugging or running without Phase 2/3 datasets.
+gym.register(
+    id="OmniReset-G1Dex3-Pick-Cylinder-Train-Simple-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.rl_state_cfg:G1Dex3PickTrainSimpleCfg",
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_cfg:Base_PPORunnerCfg",
     },
 )

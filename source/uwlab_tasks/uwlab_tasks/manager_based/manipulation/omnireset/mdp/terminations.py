@@ -904,3 +904,13 @@ def corrupted_camera_detected(
         is_corrupted |= std_per_env < std_threshold
 
     return is_corrupted
+
+
+def object_below_height(
+    env: ManagerBasedRLEnv,
+    object_cfg: SceneEntityCfg,
+    min_height: float = 0.0,
+) -> torch.Tensor:
+    """Terminate if the object falls below a world-space height threshold."""
+    obj = env.scene[object_cfg.name]
+    return obj.data.root_pos_w[:, 2] < min_height

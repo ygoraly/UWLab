@@ -475,18 +475,19 @@ class CommandsCfg:
 # ---------------------------------------------------------------------------
 @configclass
 class TerminationsCfg:
-    """Termination terms for the MDP.
-
-    Identical to the UR5e version:
-        time_out        — episode ends after episode_length_s seconds.
-        abnormal_robot  — episode ends immediately if any joint/velocity
-                          values become non-finite (NaN/Inf), protecting
-                          the replay buffer from corrupt rollouts.
-    """
+    """Termination terms for the MDP."""
 
     time_out = DoneTerm(func=task_mdp.time_out, time_out=True)
 
     abnormal_robot = DoneTerm(func=task_mdp.abnormal_robot_state)
+
+    object_fallen = DoneTerm(
+        func=task_mdp.object_below_height,
+        params={
+            "object_cfg": SceneEntityCfg("object"),
+            "min_height": 0.5,
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
